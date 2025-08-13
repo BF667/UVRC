@@ -12,11 +12,11 @@ wget
 ffmpeg-python>=0.2.0
 faiss-cpu==1.7.3
 soundfile==0.12.1
-torch==2.3.1
+torch==2.8.0
 torchaudio==2.3.1
 torchvision==0.18.1
 einops
-transformers==4.44.2
+transformers==4.53.0
 gradio
 gradio_client
 bs4
