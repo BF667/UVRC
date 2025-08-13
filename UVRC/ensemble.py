@@ -1,6 +1,3 @@
-# coding: utf-8
-__author__ = 'Roman Solovyev (ZFTurbo): https://github.com/ZFTurbo/'
-
 import os
 import librosa
 import soundfile as sf
