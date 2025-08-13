@@ -61,7 +61,7 @@ cpu = ["onnxruntime"]
 gpu = ["onnxruntime-gpu"]
 
 [tool.poetry.scripts]
-UVRC = 'UVRC.inference.cli:main'
+UVRC = 'UVRC.inference:main'
 
 [tool.poetry.group.dev.dependencies]
 pytest = "*"
