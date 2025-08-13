@@ -10,6 +10,7 @@ import numpy as np
 import soundfile as sf
 import torch.nn as nn
 
+# Using the embedded version of Python can also correctly import the utils module.
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 from utils import demix, get_model_from_config
