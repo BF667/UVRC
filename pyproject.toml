@@ -32,8 +32,7 @@ classifiers = [
 [tool.poetry.dependencies]
 python = ">=3.10"
 requests = ">=2"
-audio-separator[gpu]  = "*"
-audio-separator[cpu] = "*"
+audio-separator  = "*"
 
 [tool.poetry.extras]
 cpu = ["onnxruntime"]
