@@ -57,8 +57,6 @@ scipy = "^1.13.0"
 UVR_resources = "*"
 
 [tool.poetry.extras]
-cpu = ["audio-separator[cpu]"]
-gpu = ["audio-separator[gpu]"]
 cpu = ["onnxruntime"]
 gpu = ["onnxruntime-gpu"]
 
