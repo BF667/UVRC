@@ -9,6 +9,13 @@ import torch
 import numpy as np
 import soundfile as sf
 import torch.nn as nn
+import json
+import requests
+import yaml
+from typing import Optional, Dict, List
+import textwrap
+import hashlib
+from urllib.parse import urlparse
 
 # Using the embedded version of Python can also correctly import the utils module.
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -16,7 +23,6 @@ sys.path.append(current_dir)
 from utils import demix, get_model_from_config
 
 import warnings
-
 warnings.filterwarnings("ignore")
 
 
@@ -129,8 +135,576 @@ def run_file(model, args, config, device, verbose=False):
     print("Elapsed time: {:.2f} sec".format(time.time() - start_time))
 
 
+class ModelManager:
+    """Manager for handling model listing, configurations, and links"""
+    
+    def __init__(self):
+        self.cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "audio-separator")
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Model source URLs
+        self.urls = {
+            "download_checks": "https://raw.githubusercontent.com/TRvlvr/application_data/main/filelists/download_checks.json",
+            "model_scores": "https://raw.githubusercontent.com/TRvlvr/application_data/main/model_data/model_scores.json",
+            "vr_model_data": "https://raw.githubusercontent.com/TRvlvr/application_data/main/vr_model_data/model_data_new.json",
+            "mdx_model_data": "https://raw.githubusercontent.com/TRvlvr/application_data/main/mdx_model_data/model_data_new.json"
+        }
+        
+        # Repository URLs for model downloads
+        self.repo_urls = {
+            "public": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models",
+            "vip": "https://github.com/Anjok0109/ai_magic/releases/download/v5",
+            "audio_separator": "https://github.com/nomadkaraoke/python-audio-separator/releases/download/model-configs"
+        }
+        
+        self.model_data_cache = {}
+        
+    def fetch_json_data(self, url_key: str, cache_filename: str) -> Dict:
+        """Fetch JSON data from URL with caching"""
+        cache_path = os.path.join(self.cache_dir, cache_filename)
+        
+        # Try cache first
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    print(f"Loaded cached data from {cache_filename}")
+                    return data
+            except:
+                pass
+        
+        # Fetch from URL
+        try:
+            print(f"Fetching {url_key} from {self.urls[url_key]}...")
+            response = requests.get(self.urls[url_key], timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            # Cache the data
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            
+            return data
+        except Exception as e:
+            print(f"Error fetching {url_key}: {e}")
+            raise
+    
+    def get_model_download_links(self, model_info: Dict) -> List[str]:
+        """Get download links for a model"""
+        links = []
+        model_type = model_info.get("type", "").lower()
+        
+        # Determine which repository to use
+        is_vip = "VIP" in model_info.get("name", "")
+        repo_url = self.repo_urls["vip"] if is_vip else self.repo_urls["public"]
+        
+        # Get download files from model info
+        download_files = model_info.get("download_files", [model_info.get("filename")])
+        
+        for file in download_files:
+            if file.startswith("http"):
+                # Already a full URL
+                links.append(file)
+            else:
+                # Construct URL based on file type and model type
+                if file.endswith(".yaml"):
+                    if model_type == "mdxc":
+                        # Try UVR repo first
+                        yaml_url = f"{repo_url}/mdx_model_data/mdx_c_configs/{file}"
+                        links.append(yaml_url)
+                        
+                        # Also add audio-separator repo as backup
+                        backup_url = f"{self.repo_urls['audio_separator']}/{file}"
+                        links.append(f"Backup: {backup_url}")
+                    else:
+                        links.append(f"{repo_url}/{file}")
+                else:
+                    links.append(f"{repo_url}/{file}")
+        
+        return links
+    
+    def get_model_config_details(self, model_info: Dict, model_data: Dict = None) -> Dict:
+        """Extract configuration details from model data"""
+        config_details = {}
+        
+        if model_data:
+            # Extract common config parameters
+            common_params = [
+                "sr", "n_fft", "hop_length", "n_bins", "chunk_size", 
+                "seed", "dim_t", "dim_c", "self_attention", "depth",
+                "window_size", "batch_size", "segment_size", "overlap"
+            ]
+            
+            for param in common_params:
+                if param in model_data:
+                    config_details[param] = model_data[param]
+            
+            # Extract architecture-specific parameters
+            if "architecture" in model_data:
+                config_details["architecture"] = model_data["architecture"]
+            
+            if "inference" in model_data:
+                config_details["inference"] = model_data["inference"]
+            
+            if "training" in model_data:
+                config_details["training_stems"] = model_data["training"].get("instruments", [])
+                if "target_instrument" in model_data["training"]:
+                    config_details["target_stem"] = model_data["training"]["target_instrument"]
+        
+        return config_details
+    
+    def get_model_hash_info(self, filename: str) -> Dict:
+        """Get model hash and size information"""
+        hash_info = {}
+        
+        # Check if file exists locally
+        local_path = os.path.join(self.cache_dir, "models", filename)
+        if os.path.exists(local_path):
+            try:
+                # Calculate file size
+                size_bytes = os.path.getsize(local_path)
+                size_mb = size_bytes / (1024 * 1024)
+                hash_info["size_mb"] = round(size_mb, 2)
+                
+                # Calculate MD5 hash
+                md5_hash = hashlib.md5()
+                with open(local_path, 'rb') as f:
+                    # Read first 10MB for hash calculation
+                    chunk = f.read(10 * 1024 * 1024)
+                    md5_hash.update(chunk)
+                hash_info["md5"] = md5_hash.hexdigest()[:8] + "..."
+                
+            except:
+                pass
+        
+        return hash_info
+    
+    def get_all_model_data(self) -> Dict:
+        """Get all model data including configurations and links"""
+        print("Fetching model data from various sources...")
+        
+        # Fetch all required data
+        try:
+            download_checks = self.fetch_json_data("download_checks", "download_checks.json")
+            model_scores = self.fetch_json_data("model_scores", "model_scores.json")
+            vr_model_data = self.fetch_json_data("vr_model_data", "vr_model_data.json")
+            mdx_model_data = self.fetch_json_data("mdx_model_data", "mdx_model_data.json")
+            
+            # Load audio-separator models
+            try:
+                # Try to load from package
+                import importlib.resources
+                with importlib.resources.open_text("audio_separator", "models.json") as f:
+                    audio_separator_models = json.load(f)
+            except:
+                # Fallback
+                audio_separator_models = {"vr_download_list": {}, "mdx_download_list": {}, 
+                                         "mdx23c_download_list": {}, "roformer_download_list": {}}
+            
+            # Load audio-separator model data
+            try:
+                with importlib.resources.open_text("audio_separator", "model-data.json") as f:
+                    audio_separator_model_data = json.load(f)
+            except:
+                audio_separator_model_data = {"vr_model_data": {}, "mdx_model_data": {}}
+            
+            # Merge model data
+            vr_model_data = {**vr_model_data, **audio_separator_model_data.get("vr_model_data", {})}
+            mdx_model_data = {**mdx_model_data, **audio_separator_model_data.get("mdx_model_data", {})}
+            
+        except Exception as e:
+            print(f"Error fetching model data: {e}")
+            return {}
+        
+        # Process models by type
+        all_models = {}
+        
+        # Process MDX models
+        mdx_models = {**download_checks["mdx_download_list"], 
+                      **download_checks["mdx_download_vip_list"],
+                      **audio_separator_models["mdx_download_list"]}
+        
+        for name, filename in mdx_models.items():
+            model_key = filename
+            all_models[model_key] = {
+                "name": name,
+                "filename": filename,
+                "type": "MDX",
+                "is_vip": "VIP" in name,
+                "scores": model_scores.get(filename, {}).get("median_scores", {}),
+                "stems": model_scores.get(filename, {}).get("stems", []),
+                "target_stem": model_scores.get(filename, {}).get("target_stem"),
+                "download_files": [filename]
+            }
+        
+        # Process Demucs v4 models
+        filtered_demucs = {k: v for k, v in download_checks["demucs_download_list"].items() 
+                          if k.startswith("Demucs v4")}
+        
+        for name, files in filtered_demucs.items():
+            yaml_file = next((f for f in files.keys() if f.endswith(".yaml")), None)
+            if yaml_file:
+                model_key = yaml_file
+                all_models[model_key] = {
+                    "name": name,
+                    "filename": yaml_file,
+                    "type": "Demucs",
+                    "is_vip": False,
+                    "scores": model_scores.get(yaml_file, {}).get("median_scores", {}),
+                    "stems": model_scores.get(yaml_file, {}).get("stems", []),
+                    "target_stem": model_scores.get(yaml_file, {}).get("target_stem"),
+                    "download_files": list(files.values())
+                }
+        
+        # Process MDXC models
+        mdxc_sources = {**download_checks["mdx23c_download_list"],
+                       **download_checks["mdx23c_download_vip_list"],
+                       **download_checks["roformer_download_list"],
+                       **audio_separator_models["mdx23c_download_list"],
+                       **audio_separator_models["roformer_download_list"]}
+        
+        for name, files in mdxc_sources.items():
+            model_file = next(iter(files.keys()))
+            model_key = model_file
+            all_models[model_key] = {
+                "name": name,
+                "filename": model_file,
+                "type": "MDXC",
+                "is_vip": "VIP" in name,
+                "scores": model_scores.get(model_file, {}).get("median_scores", {}),
+                "stems": model_scores.get(model_file, {}).get("stems", []),
+                "target_stem": model_scores.get(model_file, {}).get("target_stem"),
+                "download_files": list(files.keys()) + list(files.values())
+            }
+        
+        # Add model data from hash-based lookup
+        self.add_model_data_from_hashes(all_models, vr_model_data, mdx_model_data)
+        
+        return all_models
+    
+    def add_model_data_from_hashes(self, all_models: Dict, vr_model_data: Dict, mdx_model_data: Dict):
+        """Add model configuration data using hash lookup"""
+        # Create a lookup for model data by hash
+        hash_to_data = {**vr_model_data, **mdx_model_data}
+        
+        # Download and hash models to find their configurations
+        for model_key, model_info in list(all_models.items()):
+            filename = model_info["filename"]
+            
+            # Try to download model to get hash
+            try:
+                model_path = self.download_model_file(filename)
+                if model_path and os.path.exists(model_path):
+                    model_hash = self.calculate_model_hash(model_path)
+                    
+                    # Look up model data by hash
+                    if model_hash in hash_to_data:
+                        model_info["model_data"] = hash_to_data[model_hash]
+                        model_info["hash"] = model_hash
+                        
+                        # Add hash info
+                        hash_info = self.get_model_hash_info(filename)
+                        if hash_info:
+                            model_info["hash_info"] = hash_info
+                    
+            except Exception as e:
+                # Silently continue if we can't download/hash
+                pass
+    
+    def download_model_file(self, filename: str) -> str:
+        """Download a model file if not already cached"""
+        models_dir = os.path.join(self.cache_dir, "models")
+        os.makedirs(models_dir, exist_ok=True)
+        
+        model_path = os.path.join(models_dir, filename)
+        
+        if os.path.exists(model_path):
+            return model_path
+        
+        # Try to download from public repo
+        try:
+            url = f"{self.repo_urls['public']}/{filename}"
+            response = requests.get(url, stream=True, timeout=60)
+            
+            if response.status_code == 200:
+                with open(model_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                return model_path
+        except:
+            pass
+        
+        return None
+    
+    def calculate_model_hash(self, model_path: str, bytes_to_hash: int = 10000 * 1024) -> str:
+        """Calculate hash of model file (same as UVR method)"""
+        try:
+            file_size = os.path.getsize(model_path)
+            
+            with open(model_path, "rb") as f:
+                if file_size < bytes_to_hash:
+                    # Hash the entire file
+                    return hashlib.md5(f.read()).hexdigest()
+                else:
+                    # Hash the last bytes_to_hash bytes
+                    f.seek(file_size - bytes_to_hash)
+                    return hashlib.md5(f.read()).hexdigest()
+        except:
+            return None
+
+
+def list_supported_models(
+    filter_sort_by: Optional[str] = None,
+    show_details: bool = False,
+    show_links: bool = False,
+    show_config: bool = False,
+    limit: int = 20
+) -> Dict:
+    """
+    List supported models with detailed information including configs and links.
+    """
+    manager = ModelManager()
+    all_models = manager.get_all_model_data()
+    
+    if not all_models:
+        print("Failed to load model data.")
+        return {}
+    
+    # Process and display models
+    simplified_list = {}
+    
+    for model_key, model_info in all_models.items():
+        filename = model_info["filename"]
+        name = model_info["name"]
+        model_type = model_info["type"]
+        is_vip = model_info.get("is_vip", False)
+        scores = model_info.get("scores") or {}
+        stems = model_info.get("stems") or []
+        target_stem = model_info.get("target_stem")
+        model_data = model_info.get("model_data", {})
+        
+        # Format stems with SDR scores
+        stems_with_scores = []
+        stem_sdr_dict = {}
+        
+        for stem in stems:
+            stem_scores = scores.get(stem, {})
+            stem_display = f"{stem}*" if stem == target_stem else stem
+            
+            if isinstance(stem_scores, dict) and "SDR" in stem_scores:
+                sdr = round(stem_scores["SDR"], 1)
+                stems_with_scores.append(f"{stem_display} ({sdr})")
+                stem_sdr_dict[stem.lower()] = sdr
+            else:
+                stems_with_scores.append(stem_display)
+                stem_sdr_dict[stem.lower()] = None
+        
+        if not stems_with_scores:
+            stems_with_scores = ["Unknown"]
+            stem_sdr_dict["unknown"] = None
+        
+        # Get download links
+        download_links = manager.get_model_download_links(model_info) if show_links else []
+        
+        # Get config details
+        config_details = manager.get_model_config_details(model_info, model_data) if show_config else {}
+        
+        # Get hash info
+        hash_info = model_info.get("hash_info", {})
+        
+        simplified_list[filename] = {
+            "Name": name,
+            "Type": model_type,
+            "VIP": is_vip,
+            "Filename": filename,
+            "Stems": stems_with_scores,
+            "SDR": stem_sdr_dict,
+            "ModelData": model_data if show_details else {},
+            "Config": config_details if show_config else {},
+            "Links": download_links if show_links else [],
+            "HashInfo": hash_info
+        }
+    
+    # Sort and filter
+    if filter_sort_by:
+        if filter_sort_by == "name":
+            simplified_list = dict(sorted(simplified_list.items(), key=lambda x: x[1]["Name"]))
+        elif filter_sort_by == "filename":
+            simplified_list = dict(sorted(simplified_list.items()))
+        elif filter_sort_by in ["vocals", "instrumental", "drums", "bass", "other"]:
+            sort_by_lower = filter_sort_by.lower()
+            filtered = {k: v for k, v in simplified_list.items() 
+                       if sort_by_lower in v["SDR"] and v["SDR"][sort_by_lower] is not None}
+            sorted_items = sorted(filtered.items(), 
+                                 key=lambda x: x[1]["SDR"][sort_by_lower], 
+                                 reverse=True)
+            simplified_list = dict(sorted_items)
+    
+    # Limit results
+    if limit:
+        limited_items = list(simplified_list.items())[:limit]
+        simplified_list = dict(limited_items)
+    
+    return simplified_list
+
+
+def display_model_leaderboard(
+    models_dict: Dict,
+    sort_by: Optional[str] = None,
+    show_details: bool = False,
+    show_links: bool = False,
+    show_config: bool = False,
+    limit: int = 20
+):
+    """
+    Display models in a formatted leaderboard with detailed information.
+    """
+    if not models_dict:
+        print("No models found.")
+        return
+    
+    terminal_width = 100
+    print("\n" + "="*terminal_width)
+    print(f"AUDIO SEPARATION MODEL LEADERBOARD".center(terminal_width))
+    print("="*terminal_width)
+    
+    # Display filter info
+    filter_info = []
+    if sort_by:
+        filter_info.append(f"Sort: {sort_by}")
+    if limit:
+        filter_info.append(f"Limit: {limit}")
+    if show_details:
+        filter_info.append("Details: ON")
+    if show_links:
+        filter_info.append("Links: ON")
+    if show_config:
+        filter_info.append("Config: ON")
+    
+    if filter_info:
+        print(f"Filters: {' | '.join(filter_info)}")
+        print("-"*terminal_width)
+    
+    # Display each model
+    for i, (filename, model_info) in enumerate(models_dict.items(), 1):
+        name = model_info["Name"]
+        model_type = model_info["Type"]
+        is_vip = model_info["VIP"]
+        stems = ", ".join(model_info["Stems"])
+        
+        # Header with basic info
+        vip_marker = " 🔥" if is_vip else ""
+        header = f"{i}. {name}{vip_marker}"
+        print(f"\n{header}")
+        print("-"*min(len(header), terminal_width))
+        
+        # Basic info
+        print(f"   Type: {model_type} | File: {filename}")
+        
+        # Stems and scores
+        if model_info["Stems"]:
+            print(f"   Stems: {stems}")
+        
+        # Hash info
+        if model_info.get("HashInfo"):
+            hash_info = model_info["HashInfo"]
+            size_info = f"Size: {hash_info.get('size_mb', 'N/A')}MB" if hash_info.get('size_mb') else ""
+            hash_part = f"Hash: {hash_info.get('md5', 'N/A')}" if hash_info.get('md5') else ""
+            if size_info or hash_part:
+                print(f"   {size_info} {hash_part}".strip())
+        
+        # Download links
+        if show_links and model_info["Links"]:
+            print(f"   Download Links:")
+            for j, link in enumerate(model_info["Links"][:3], 1):  # Show first 3 links
+                # Shorten long URLs
+                if len(link) > 70:
+                    link_display = link[:67] + "..."
+                else:
+                    link_display = link
+                print(f"     {j}. {link_display}")
+            if len(model_info["Links"]) > 3:
+                print(f"     ... and {len(model_info['Links']) - 3} more")
+        
+        # Configuration details
+        if show_config and model_info["Config"]:
+            print(f"   Configuration:")
+            config = model_info["Config"]
+            
+            # Group config parameters
+            basic_params = {}
+            arch_params = {}
+            
+            for key, value in config.items():
+                if key in ["sr", "n_fft", "hop_length", "segment_size", "batch_size", "overlap"]:
+                    basic_params[key] = value
+                elif key in ["architecture", "window_size", "chunk_size", "dim_t", "dim_c", "depth"]:
+                    arch_params[key] = value
+            
+            # Display basic parameters
+            if basic_params:
+                basic_str = ", ".join([f"{k}: {v}" for k, v in basic_params.items()])
+                print(f"     Basic: {basic_str}")
+            
+            # Display architecture parameters
+            if arch_params:
+                arch_str = ", ".join([f"{k}: {v}" for k, v in arch_params.items()])
+                print(f"     Architecture: {arch_str}")
+            
+            # Display training info
+            if "training_stems" in config:
+                print(f"     Training Stems: {', '.join(config['training_stems'])}")
+            if "target_stem" in config:
+                print(f"     Target Stem: {config['target_stem']}")
+        
+        # Detailed model data
+        if show_details and model_info.get("ModelData"):
+            print(f"   Raw Model Data (first 5 keys):")
+            model_data = model_info["ModelData"]
+            for j, (key, value) in enumerate(list(model_data.items())[:5]):
+                value_str = str(value)
+                if len(value_str) > 40:
+                    value_str = value_str[:37] + "..."
+                print(f"     {key}: {value_str}")
+            if len(model_data) > 5:
+                print(f"     ... and {len(model_data) - 5} more parameters")
+    
+    print("\n" + "="*terminal_width)
+    print("LEGEND:")
+    print("  * = Primary target stem")
+    print("  🔥 = VIP model (support Anjok07 on Patreon)")
+    print("  SDR = Signal-to-Distortion Ratio (higher is better)")
+    print(f"Total models in list: {len(models_dict)}")
+    print("="*terminal_width + "\n")
+
+
 def proc_file(args):
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Audio Separation Tool with Model Leaderboard",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic model listing
+  python script.py --list_models
+  
+  # List top 10 vocal models
+  python script.py --list_models --sort_by vocals --limit 10
+  
+  # Show models with download links
+  python script.py --list_models --show_links
+  
+  # Show models with configuration details
+  python script.py --list_models --show_config
+  
+  # Show all details including model data
+  python script.py --list_models --show_details --show_links --show_config
+  
+  # Process audio file (original functionality)
+  python script.py --input_file song.mp3 --model_type mdx23c
+        """
+    )
+    
+    # Original arguments
     parser.add_argument(
         "--model_type",
         type=str,
@@ -183,11 +757,78 @@ def proc_file(args):
         action="store_true",
         help="Flag adds test time augmentation during inference (polarity and channel inverse). While this triples the runtime, it reduces noise and slightly improves prediction quality.",
     )
+    
+    # Model listing arguments
+    parser.add_argument(
+        "--list_models",
+        action="store_true",
+        help="List all available models with their SDR scores"
+    )
+    parser.add_argument(
+        "--sort_by",
+        type=str,
+        choices=["name", "filename", "vocals", "instrumental", "drums", "bass", "other"],
+        help="Sort models by name, filename, or stem SDR score"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Limit number of models shown in leaderboard"
+    )
+    parser.add_argument(
+        "--show_details",
+        action="store_true",
+        help="Show detailed model data including raw parameters"
+    )
+    parser.add_argument(
+        "--show_links",
+        action="store_true",
+        help="Show download links for each model"
+    )
+    parser.add_argument(
+        "--show_config",
+        action="store_true",
+        help="Show model configuration details"
+    )
+    parser.add_argument(
+        "--export_json",
+        type=str,
+        help="Export model list to JSON file"
+    )
+    
     if args is None:
         args = parser.parse_args()
     else:
         args = parser.parse_args(args)
 
+    # Handle list_models argument
+    if args.list_models:
+        print("Loading model database...")
+        models = list_supported_models(
+            filter_sort_by=args.sort_by,
+            show_details=args.show_details,
+            show_links=args.show_links,
+            show_config=args.show_config,
+            limit=args.limit
+        )
+        
+        if args.export_json:
+            with open(args.export_json, 'w', encoding='utf-8') as f:
+                json.dump(models, f, indent=2, ensure_ascii=False)
+            print(f"Model list exported to {args.export_json}")
+        
+        display_model_leaderboard(
+            models,
+            sort_by=args.sort_by,
+            show_details=args.show_details,
+            show_links=args.show_links,
+            show_config=args.show_config,
+            limit=args.limit
+        )
+        return
+
+    # Original processing logic continues here...
     device = "cpu"
     if args.force_cpu:
         device = "cpu"
