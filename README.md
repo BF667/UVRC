@@ -3,6 +3,7 @@
 
 This application uses state-of-the-art source separation models to remove vocals from audio files. 
 
+[Colab Notebook](https://colab.research.google.com/github/BF667/UVRC/blob/main/UVRC.ipynb)
 
 ---
 
@@ -19,3 +20,4 @@ These bundles contain the UVR interface, Python, PyTorch, and other dependencies
 
 * [Anjok07](https://github.com/anjok07) - UVR5 Creator
 * [ZFTurbo](https://github.com/ZFTurbo) - base code creator
+
