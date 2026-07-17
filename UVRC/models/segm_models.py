@@ -2,189 +2,59 @@ import torch
 import torch.nn as nn
 import segmentation_models_pytorch as smp
 
-
-class STFT:
-    def __init__(self, config):
-        self.n_fft = config.n_fft
-        self.hop_length = config.hop_length
-        self.window = torch.hann_window(window_length=self.n_fft, periodic=True)
-        self.dim_f = config.dim_f
-
-    def __call__(self, x):
-        window = self.window.to(x.device)
-        batch_dims = x.shape[:-2]
-        c, t = x.shape[-2:]
-        x = x.reshape([-1, t])
-        x = torch.stft(
-            x,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            window=window,
-            center=True,
-            return_complex=True
-        )
-        x = torch.view_as_real(x)
-        x = x.permute([0, 3, 1, 2])
-        x = x.reshape([*batch_dims, c, 2, -1, x.shape[-1]]).reshape([*batch_dims, c * 2, -1, x.shape[-1]])
-        return x[..., :self.dim_f, :]
-
-    def inverse(self, x):
-        window = self.window.to(x.device)
-        batch_dims = x.shape[:-3]
-        c, f, t = x.shape[-3:]
-        n = self.n_fft // 2 + 1
-        f_pad = torch.zeros([*batch_dims, c, n - f, t]).to(x.device)
-        x = torch.cat([x, f_pad], -2)
-        x = x.reshape([*batch_dims, c // 2, 2, n, t]).reshape([-1, 2, n, t])
-        x = x.permute([0, 2, 3, 1])
-        x = x[..., 0] + x[..., 1] * 1.j
-        x = torch.istft(
-            x,
-            n_fft=self.n_fft,
-            hop_length=self.hop_length,
-            window=window,
-            center=True
-        )
-        x = x.reshape([*batch_dims, 2, -1])
-        return x
+from models.common import STFT, get_act, cac2cws, cws2cac
 
 
-def get_act(act_type):
-    if act_type == 'gelu':
-        return nn.GELU()
-    elif act_type == 'relu':
-        return nn.ReLU()
-    elif act_type[:3] == 'elu':
-        alpha = float(act_type.replace('elu', ''))
-        return nn.ELU(alpha)
-    else:
-        raise Exception
+# Mapping from decoder_type string to smp class
+_DECODER_MAP = {
+    "unet": smp.Unet,
+    "fpn": smp.FPN,
+    "unet++": smp.UnetPlusPlus,
+    "manet": smp.MAnet,
+    "linknet": smp.Linknet,
+    "pspnet": smp.PSPNet,
+    "pan": smp.PAN,
+    "deeplabv3": smp.DeepLabV3,
+    "deeplabv3plus": smp.DeepLabV3Plus,
+}
+
+# Mapping from decoder_type to config key holding extra options
+_DECODER_CONFIG_KEYS = {
+    "unet": "decoder_unet",
+    "fpn": "decoder_fpn",
+    "unet++": "decoder_unet_plus_plus",
+    "manet": "decoder_manet",
+    "linknet": "decoder_linknet",
+    "pspnet": "decoder_pspnet",
+    "pan": "decoder_pan",
+    "deeplabv3": "decoder_deeplabv3",
+    "deeplabv3plus": "decoder_deeplabv3plus",
+}
 
 
 def get_decoder(config, c):
-    decoder = None
-    decoder_options = dict()
-    if config.model.decoder_type == 'unet':
+    """Instantiate a segmentation model decoder from config."""
+    decoder_type = config.model.decoder_type
+    if decoder_type not in _DECODER_MAP:
+        raise ValueError(f"Unknown decoder type: {decoder_type}")
+
+    decoder_cls = _DECODER_MAP[decoder_type]
+    decoder_options = {}
+
+    config_key = _DECODER_CONFIG_KEYS.get(decoder_type)
+    if config_key:
         try:
-            decoder_options = dict(config.decoder_unet)
-        except:
+            decoder_options = dict(getattr(config, config_key))
+        except AttributeError:
             pass
-        decoder = smp.Unet(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'fpn':
-        try:
-            decoder_options = dict(config.decoder_fpn)
-        except:
-            pass
-        decoder = smp.FPN(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'unet++':
-        try:
-            decoder_options = dict(config.decoder_unet_plus_plus)
-        except:
-            pass
-        decoder = smp.UnetPlusPlus(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'manet':
-        try:
-            decoder_options = dict(config.decoder_manet)
-        except:
-            pass
-        decoder = smp.MAnet(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'linknet':
-        try:
-            decoder_options = dict(config.decoder_linknet)
-        except:
-            pass
-        decoder = smp.Linknet(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'pspnet':
-        try:
-            decoder_options = dict(config.decoder_pspnet)
-        except:
-            pass
-        decoder = smp.PSPNet(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'pspnet':
-        try:
-            decoder_options = dict(config.decoder_pspnet)
-        except:
-            pass
-        decoder = smp.PSPNet(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'pan':
-        try:
-            decoder_options = dict(config.decoder_pan)
-        except:
-            pass
-        decoder = smp.PAN(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'deeplabv3':
-        try:
-            decoder_options = dict(config.decoder_deeplabv3)
-        except:
-            pass
-        decoder = smp.DeepLabV3(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    elif config.model.decoder_type == 'deeplabv3plus':
-        try:
-            decoder_options = dict(config.decoder_deeplabv3plus)
-        except:
-            pass
-        decoder = smp.DeepLabV3Plus(
-            encoder_name=config.model.encoder_name,
-            encoder_weights="imagenet",
-            in_channels=c,
-            classes=c,
-            **decoder_options,
-        )
-    return decoder
+
+    return decoder_cls(
+        encoder_name=config.model.encoder_name,
+        encoder_weights="imagenet",
+        in_channels=c,
+        classes=c,
+        **decoder_options,
+    )
 
 
 class Segm_Models_Net(nn.Module):
@@ -214,18 +84,10 @@ class Segm_Models_Net(nn.Module):
         self.stft = STFT(config.audio)
 
     def cac2cws(self, x):
-        k = self.num_subbands
-        b, c, f, t = x.shape
-        x = x.reshape(b, c, k, f // k, t)
-        x = x.reshape(b, c * k, f // k, t)
-        return x
+        return cac2cws(x, self.num_subbands)
 
     def cws2cac(self, x):
-        k = self.num_subbands
-        b, c, f, t = x.shape
-        x = x.reshape(b, c // k, k, f, t)
-        x = x.reshape(b, c // k, f * k, t)
-        return x
+        return cws2cac(x, self.num_subbands)
 
     def forward(self, x):
 

@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "UVRC"
-version = "1.0"
+version = "1.1.0"
 description = "Easy to use audio stem separation, using custom models"
 authors = ["BF667"]
 license = "MIT"
@@ -14,7 +14,7 @@ packages = [{include = "UVRC"}]
 homepage = "https://github.com/BF667/UVRC"
 repository = "https://github.com/BF667/UVRC"
 documentation = "https://github.com/BF667/UVRC/blob/main/README.md"
-keywords = ["audio", "sound", "karaoke"]
+keywords = ["audio", "sound", "karaoke", "vocal-remover", "source-separation"]
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -34,7 +34,7 @@ python = ">=3.10"
 requests = ">=2"
 numpy = ">=1.23"
 librosa = ">=0.10"
-samplerate = "0.1.0"
+samplerate = ">=0.1.0"
 six = ">=1.16"
 torch = ">=2.3"
 tqdm = "*"
@@ -55,6 +55,16 @@ beartype = "^0.18.5"
 rotary-embedding-torch = "^0.6.1"
 scipy = "^1.13.0"
 UVR_resources = "*"
+# Previously missing — imported at runtime but not declared
+omegaconf = ">=2.3"
+soundfile = ">=0.12"
+pytorch-lightning = ">=2.0"
+torchaudio = ">=2.3"
+segmentation-models-pytorch = ">=0.3"
+torchseg = ">=0.0.1"
+transformers = ">=4.30"
+demucs = ">=4.0"
+packaging = ">=23.0"
 
 [tool.poetry.extras]
 cpu = ["onnxruntime"]

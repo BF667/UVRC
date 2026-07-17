@@ -14,7 +14,7 @@ class SafeSignalDistortionRatio(tm.SignalDistortionRatio):
     def update(self, *args, **kwargs) -> Any:
         try:
             super().update(*args, **kwargs)
-        except:
+        except (RuntimeError, _LinAlgError, ValueError):
             pass
 
     def compute(self) -> Any:

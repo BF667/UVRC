@@ -477,7 +477,7 @@ class BSRoformer(Module):
         # Since it's tedious to define whether we're on correct MacOS version - simple try-catch is used
         try:
             stft_repr = torch.stft(raw_audio, **self.stft_kwargs, window=stft_window, return_complex=True)
-        except:
+        except RuntimeError:
             stft_repr = torch.stft(raw_audio.cpu() if x_is_mps else raw_audio, **self.stft_kwargs, window=stft_window.cpu() if x_is_mps else stft_window, return_complex=True).to(device)
 
         stft_repr = torch.view_as_real(stft_repr)
@@ -541,7 +541,7 @@ class BSRoformer(Module):
         # same as torch.stft() fix for MacOS MPS above
         try:
             recon_audio = torch.istft(stft_repr, **self.stft_kwargs, window=stft_window, return_complex=False)
-        except:
+        except RuntimeError:
             recon_audio = torch.istft(stft_repr.cpu() if x_is_mps else stft_repr, **self.stft_kwargs, window=stft_window.cpu() if x_is_mps else stft_window, return_complex=False).to(device)
 
         recon_audio = rearrange(recon_audio, '(b n s) t -> b n s t', s=self.audio_channels, n=num_stems)

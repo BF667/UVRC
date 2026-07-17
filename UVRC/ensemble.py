@@ -1,4 +1,5 @@
 import os
+import sys
 import librosa
 import soundfile as sf
 import numpy as np
@@ -143,7 +144,7 @@ def ensemble_files(args):
     for f in args.files:
         if not os.path.isfile(f):
             print('Error. Can\'t find file: {}. Check paths.'.format(f))
-            exit()
+            sys.exit(1)
         print('Reading file: {}'.format(f))
         wav, sr = librosa.load(f, sr=None, mono=False)
         # wav, sr = sf.read(f)

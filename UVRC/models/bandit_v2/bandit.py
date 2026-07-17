@@ -213,7 +213,7 @@ class BaseBandit(BaseEndToEndModule):
 
         batch = self.separate(batch)
 
-        if 1:
+        if True:
             b = []
             for s in self.stems:
                 # We need to obtain stereo again
